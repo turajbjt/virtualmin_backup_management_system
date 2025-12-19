@@ -151,7 +151,8 @@ All package manager commands, repo paths, and OS-specific configurations are aut
   > my $REMOTE_HOST = "backup.example.com";
   > my $REMOTE_BASE = "/backups/virtualmin";
   > my $SSH_PORT    = 22;
-  > 
+  >
+  > my $MYSQL_HOST  = "localhost";
   > my $MYSQL_USER  = "root";
   > my $MYSQL_PASS  = "MYSQL_ROOT_PASSWORD";
   > 
