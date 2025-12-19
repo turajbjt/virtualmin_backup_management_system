@@ -10,7 +10,7 @@ Incorporating everything needed to manage a Virtualmin server:
 
 ---
 
-> ## Disclaimer:
+> ## :warning: Disclaimer:
 >
 > By using this code, you acknowledge and agree that the usage is at your sole responsibility. The repository maintainers cannot be held liable for any damage, data loss, or disruptions to your systems.
 >
@@ -28,7 +28,7 @@ Incorporating everything needed to manage a Virtualmin server:
 
 **Virtualmin Backup & Migration System — Documentation & Script**
 
-1. <ins>*Overview*</ins>
+# 1. <ins>*Overview*</ins>
 
   This system allows you to:
 
@@ -43,7 +43,8 @@ Incorporating everything needed to manage a Virtualmin server:
   * Prune old backups automatically.
   * Operate safely with locks to prevent concurrent runs.
 
-2. <ins>*Supported Operating Systems*</ins>
+
+# 2. <ins>*Supported Operating Systems*</ins>
 
   * Rocky Linux 8/9
   * Ubuntu 20.04 / 22.04 / 24.04
@@ -51,7 +52,8 @@ Incorporating everything needed to manage a Virtualmin server:
 
 All package manager commands, repo paths, and OS-specific configurations are automatically handled.
 
-3. <ins>*Features*</ins>
+
+# 3. <ins>*Features*</ins>
 
   ***Backup Modes***
   | *Mode*        | *Description* |
@@ -81,48 +83,48 @@ All package manager commands, repo paths, and OS-specific configurations are aut
   * Retention pruning of old backups
 
 
-4. <ins>*Usage Examples*</ins>
+# 4. <ins>*Usage Examples*</ins>
 
-  ### Full backup
-  virtualmin-backup.pl backup
+  #### Full backup
+  ``virtualmin-backup.pl backup``
   
-  ### Incremental backup
-  virtualmin-backup.pl backup-update
+  #### Incremental backup
+  ``virtualmin-backup.pl backup-update``
   
-  ### Full restore
-  virtualmin-backup.pl restore
+  #### Full restore
+  ``virtualmin-backup.pl restore``
   
-  ### Incremental restore
-  virtualmin-backup.pl restore-update
+  #### Incremental restore
+  ``virtualmin-backup.pl restore-update``
   
-  ### Restore single domain
-  virtualmin-backup.pl restore-domain example.com
+  #### Restore single domain
+  ``virtualmin-backup.pl restore-domain example.com``
   
-  ### Restore all domains
-  virtualmin-backup.pl restore-domains
+  #### Restore all domains
+  ``virtualmin-backup.pl restore-domains``
   
-  ### Test restore safely
-  virtualmin-backup.pl test-restore
-  virtualmin-backup.pl test-restore example.com
+  #### Test restore safely
+  ``virtualmin-backup.pl test-restore``
+  ``virtualmin-backup.pl test-restore example.com``
   
-  ### Cross-OS migration (Rocky <-> Ubuntu)
-  virtualmin-backup.pl migrate
+  #### Cross-OS migration (Rocky <-> Ubuntu)
+  ``virtualmin-backup.pl migrate``
   
-  ### Dry-run mode (safe testing)
-  virtualmin-backup.pl backup-update --dry-run
-  virtualmin-backup.pl restore-update --dry-run
+  #### Dry-run mode (safe testing)
+  ``virtualmin-backup.pl backup-update --dry-run``
+  ``virtualmin-backup.pl restore-update --dry-run``
 
 
-5. <ins>*Cron Recommendations*</ins>
+# 5. <ins>*Cron Recommendations*</ins>
 
   ### Incremental backup every 6 hours
-  0 */6 * * * /usr/local/sbin/virtualmin-backup.pl backup-update
+  ``0 */6 * * * /usr/local/sbin/virtualmin-backup.pl backup-update``
 
   ### Full backup weekly
-  0 2 * * 0 /usr/local/sbin/virtualmin-backup.pl backup
+  ``0 2 * * 0 /usr/local/sbin/virtualmin-backup.pl backup``
 
 
-6. <ins>*Directory Structure*</ins>
+# 6. <ins>*Directory Structure*</ins>
 
   /tmp/vmin-YYYY-MM-DD_HH-MM-SS/ → temporary working directory
   
@@ -131,15 +133,15 @@ All package manager commands, repo paths, and OS-specific configurations are aut
   $REMOTE_BASE/current/ → latest backups for restore/migration
 
 
-7. <ins>*Installation Instructions*</ins>
+# 7. <ins>*Installation Instructions*</ins>
 
   Place script:
   
-  > sudo cp virtualmin-backup.pl /usr/local/sbin/
-  > sudo chmod 700 /usr/local/sbin/virtualmin-backup.pl
+  > ``sudo cp virtualmin-backup.pl /usr/local/sbin/``
+  > ``sudo chmod 700 /usr/local/sbin/virtualmin-backup.pl``
+  >
   > Ensure required tools are installed:
-  
-  rsync, ssh, tar, sha256sum, mysql, mysqldump, virtualmin, mailx/mailutils, crontab
+  > rsync, ssh, tar, sha256sum, mysql, mysqldump, virtualmin, mailx/mailutils, crontab
   
   The script checks for missing commands and exits if not installed.
   
@@ -159,7 +161,7 @@ All package manager commands, repo paths, and OS-specific configurations are aut
   > my $RETENTION_DAYS = 30;
 
 
-8. <ins>*Final Script*</ins>
+# 8. <ins>*Final Script*</ins>
 
   Save the included script as /usr/local/sbin/virtualmin-backup.pl:
 
