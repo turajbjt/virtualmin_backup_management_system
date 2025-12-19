@@ -13,6 +13,7 @@ my $REMOTE_HOST = "backup.example.com";
 my $REMOTE_BASE = "/backups/virtualmin";
 my $SSH_PORT    = 22;
 
+my $MYSQL_HOST  = "127.0.0.1";
 my $MYSQL_USER  = "root";
 my $MYSQL_PASS  = "MYSQL_ROOT_PASSWORD";
 
@@ -152,7 +153,7 @@ make_path($TMPDIR) unless $DRYRUN;
 eval {
 
 if($MODE=~/^backup/){
-    run("mysqldump -u$MYSQL_USER -p$MYSQL_PASS --all-databases --single-transaction --routines --events > $TMPDIR/db.sql");
+    run("mysqldump -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS --all-databases --single-transaction --routines --events > $TMPDIR/db.sql");
     run("$PKG{$OS_FAMILY}{list} > $TMPDIR/packages.txt");
     open my $os,">","$TMPDIR/os.txt"; print $os "$OS_FAMILY\n"; close $os;
     run("tar --xattrs --acls -czf $TMPDIR/etc.tar.gz /etc @EXCLUDES");
@@ -172,12 +173,12 @@ elsif($MODE=~/^restore/){
         my $domain=shift @ARGV or die "Domain required\n"; my $d=domain_info($domain);
         run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/$d->{user}/ $d->{home}/");
         run("$SSH 'grep \"CREATE DATABASE .*${domain}\" $REMOTE_BASE/*/meta/db.sql' > $TMPDIR/${domain}.sql");
-        run("mysql -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/${domain}.sql");
+        run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/${domain}.sql");
         json_status("success","domain restored: $domain");
         mailit("SUCCESS domain restore $domain","Domain $domain restored");
     } elsif($MODE eq "restore-domains"){
         for my $d(list_domains()){ run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/$d->{user}/ $d->{home}/"); }
-        run("mysql -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/db.sql");
+        run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/db.sql");
         json_status("success","all domains restored");
     } else {
         run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/ /home/");
@@ -189,7 +190,7 @@ elsif($MODE=~/^restore/){
             else{ run("apt-get update"); run("xargs -a $TMPDIR/packages.txt apt-get install -y"); }
             run("tar -xzf $TMPDIR/etc.tar.gz -C /");
             run("tar -xzf $TMPDIR/repos.tar.gz -C /");
-            run("mysql -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/db.sql");
+            run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/db.sql");
         }
         json_status("success","restore complete");
         mailit("SUCCESS restore $HOST","Restore finished");
@@ -198,7 +199,7 @@ elsif($MODE=~/^restore/){
 
 elsif($MODE eq "test-restore"){
     my $domain=shift @ARGV; my $TESTDIR="/tmp/restore-test-$DATE"; make_path($TESTDIR);
-    if($domain){ my $d=domain_info($domain); run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/$d->{user}/ $TESTDIR/$d->{user}/"); run("mysql -u$MYSQL_USER -p$MYSQL_PASS < <(grep \"$domain\" $REMOTE_BASE/*/meta/db.sql)"); }
+    if($domain){ my $d=domain_info($domain); run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/$d->{user}/ $TESTDIR/$d->{user}/"); run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < <(grep \"$domain\" $REMOTE_BASE/*/meta/db.sql)"); }
     else{ run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/ $TESTDIR/"); }
     die "Restore test failed" unless -d $TESTDIR;
     system("rm -rf $TESTDIR");
@@ -213,7 +214,7 @@ elsif($MODE eq "migrate"){
     my @pkgs=translate_packages($SRC_OS,$OS_FAMILY,"$TMPDIR/packages.txt");
     if(@pkgs){ if($OS_FAMILY eq 'rhel'){ run("dnf install -y @pkgs"); } else { run("apt-get update"); run("apt-get install -y @pkgs"); } }
     run("tar -xzf $TMPDIR/etc.tar.gz -C / etc/ssh etc/cron* etc/php*");
-    run("mysql -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/db.sql");
+    run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/db.sql");
     for my $d(list_domains()){ run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/$d->{user}/ $d->{home}/"); }
     json_status("success","cross-OS migration complete");
     mailit("SUCCESS migration $HOST","Cross-OS migration completed");
