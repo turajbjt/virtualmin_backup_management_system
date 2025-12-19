@@ -72,52 +72,52 @@ else {
 
 # ================= OS-ABSTRACTION =================
 my %PKG = (
-    rhel => {
-        install => "dnf install -y",
-        list    => "rpm -qa | sort",
-        mailpkg => "mailx",
-        cronpkg => "cronie",
-        mysql   => "mysql",
-        repos   => "/etc/yum.repos.d",
+    'rhel' => {
+        'install' => "dnf install -y",
+        'list'    => "rpm -qa | sort",
+        'mailpkg' => "mailx",
+        'cronpkg' => "cronie",
+        'mysql'   => "mysql",
+        'repos'   => "/etc/yum.repos.d",
     },
-    debian => {
-        install => "apt-get install -y",
-        list    => "dpkg-query -W -f='${Package}=${Version}\n' | sort",
-        mailpkg => "mailutils",
-        cronpkg => "cron",
-        mysql   => "mysql-client",
-        repos   => "/etc/apt",
+    'debian' => {
+        'install' => "apt-get install -y",
+        'list'    => "dpkg-query -W -f='\${Package}=\${Version}\n' | sort",
+        'mailpkg' => "mailutils",
+        'cronpkg' => "cron",
+        'mysql'   => "mysql-client",
+        'repos'   => "/etc/apt",
     }
 );
 
 my %PKG_MAP = (
-    rhel_to_debian => {
-        httpd => 'apache2',
-        mariadb-server => 'mariadb-server',
-        mysql-server => 'mysql-server',
-        php => 'php',
-        php-cli => 'php-cli',
-        php-fpm => 'php-fpm',
-        bind => 'bind9',
-        vsftpd => 'vsftpd',
-        postfix => 'postfix',
-        dovecot => 'dovecot-core',
-        cronie => 'cron',
-        firewalld => 'ufw',
+    'rhel_to_debian' => {
+        'httpd' => 'apache2',
+        'mariadb-server' => 'mariadb-server',
+        'mysql-server' => 'mysql-server',
+        'php' => 'php',
+        'php-cli' => 'php-cli',
+        'php-fpm' => 'php-fpm',
+        'bind' => 'bind9',
+        'vsftpd' => 'vsftpd',
+        'postfix' => 'postfix',
+        'dovecot' => 'dovecot-core',
+        'cronie' => 'cron',
+        'firewalld' => 'ufw',
     },
-    debian_to_rhel => {
-        apache2 => 'httpd',
-        mariadb-server => 'mariadb-server',
-        mysql-server => 'mysql-server',
-        php => 'php',
-        php-cli => 'php-cli',
-        php-fpm => 'php-fpm',
-        bind9 => 'bind',
-        vsftpd => 'vsftpd',
-        postfix => 'postfix',
-        dovecot-core => 'dovecot',
-        cron => 'cronie',
-        ufw => 'firewalld',
+    'debian_to_rhel' => {
+        'apache2' => 'httpd',
+        'mariadb-server' => 'mariadb-server',
+        'mysql-server' => 'mysql-server',
+        'php' => 'php',
+        'php-cli' => 'php-cli',
+        'php-fpm' => 'php-fpm',
+        'bind9' => 'bind',
+        'vsftpd' => 'vsftpd',
+        'postfix' => 'postfix',
+        'dovecot-core' => 'dovecot',
+        'cron' => 'cronie',
+        'ufw' => 'firewalld',
     },
 );
 
