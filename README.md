@@ -105,6 +105,7 @@ All package manager commands, repo paths, and OS-specific configurations are aut
   
   #### Test restore safely
   ``virtualmin-backup.pl test-restore``
+  
   ``virtualmin-backup.pl test-restore example.com``
   
   #### Cross-OS migration (Rocky <-> Ubuntu)
@@ -112,6 +113,7 @@ All package manager commands, repo paths, and OS-specific configurations are aut
   
   #### Dry-run mode (safe testing)
   ``virtualmin-backup.pl backup-update --dry-run``
+  
   ``virtualmin-backup.pl restore-update --dry-run``
 
 
@@ -136,35 +138,38 @@ All package manager commands, repo paths, and OS-specific configurations are aut
 # 7. <ins>*Installation Instructions*</ins>
 
   Place script:
+
+  ``sudo cp virtualmin-backup.pl /usr/local/sbin/``
   
-  > ``sudo cp virtualmin-backup.pl /usr/local/sbin/``
-  > ``sudo chmod 700 /usr/local/sbin/virtualmin-backup.pl``
-  >
+  ``sudo chmod 700 /usr/local/sbin/virtualmin-backup.pl``
+
   > Ensure required tools are installed:
+  > 
   > rsync, ssh, tar, sha256sum, mysql, mysqldump, virtualmin, mailx/mailutils, crontab
   
   The script checks for missing commands and exits if not installed.
   
   Configure the variables at the top:
-  
-  > my $REMOTE_USER = "backupuser";
-  > my $REMOTE_HOST = "backup.example.com";
-  > my $REMOTE_BASE = "/backups/virtualmin";
-  > my $SSH_PORT    = 22;
-  >
-  > my $MYSQL_HOST  = "localhost";
-  > my $MYSQL_USER  = "root";
-  > my $MYSQL_PASS  = "MYSQL_ROOT_PASSWORD";
-  > 
-  > my $MAIL_TO     = "admin@example.com";
-  > my $MAIL_FROM   = "backup@" . hostname();
-  > 
-  > my $RETENTION_DAYS = 30;
 
+  ```
+  my $REMOTE_USER = "backupuser";
+  my $REMOTE_HOST = "backup.example.com";
+  my $REMOTE_BASE = "/backups/virtualmin";
+  my $SSH_PORT    = 22;
+  
+  my $MYSQL_HOST  = "localhost";
+  my $MYSQL_USER  = "root";
+  my $MYSQL_PASS  = "MYSQL_ROOT_PASSWORD";
+   
+  my $MAIL_TO     = "admin@example.com";
+  my $MAIL_FROM   = "backup@" . hostname();
+  
+  my $RETENTION_DAYS = 30;
+```
 
 # 8. <ins>*Final Script*</ins>
 
-  Save the included script as /usr/local/sbin/virtualmin-backup.pl:
+  Save the included script as ``/usr/local/sbin/virtualmin-backup.pl``
 
 ---
 
