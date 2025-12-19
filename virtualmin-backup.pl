@@ -13,7 +13,7 @@ my $REMOTE_HOST = "backup.example.com";
 my $REMOTE_BASE = "/backups/virtualmin";
 my $SSH_PORT    = 22;
 
-my $MYSQL_HOST  = "127.0.0.1";
+my $MYSQL_HOST  = "localhost";
 my $MYSQL_USER  = "root";
 my $MYSQL_PASS  = "MYSQL_ROOT_PASSWORD";
 
