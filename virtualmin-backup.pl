@@ -2,25 +2,21 @@
 use strict;
 use warnings;
 use POSIX qw(strftime);
-use File::Path qw(make_path);
+use File::Path qw(make_path remove_tree);
 use Sys::Hostname;
 use Fcntl ':flock';
 use JSON;
 
 # ================= CONFIG =================
-my $REMOTE_USER = "backupuser";
-my $REMOTE_HOST = "backup.example.com";
-my $REMOTE_BASE = "/backups/virtualmin";
-my $SSH_PORT    = 22;
+my $REMOTE_USER    = "backupuser";
+my $REMOTE_HOST    = "backup.example.com";
+my $REMOTE_BASE    = "/backups/virtualmin";
+my $SSH_PORT       = 22;
 
-my $MYSQL_HOST  = "localhost";
-my $MYSQL_USER  = "root";
-my $MYSQL_PASS  = "MYSQL_ROOT_PASSWORD";
+my $MAIL_TO        = 'admin@example.com';
+my $MAIL_FROM      = "backup@" . hostname();
 
-my $MAIL_TO   = "admin\@example.com";
-my $MAIL_FROM = "backup@" . hostname();
-
-my $LOCKFILE  = "/var/run/virtualmin-backup.lock";
+my $LOCKFILE       = "/var/run/virtualmin-backup.lock";
 my $RETENTION_DAYS = 30;
 
 # ================= FLAGS =================
@@ -28,9 +24,7 @@ my $DRYRUN = grep { $_ eq '--dry-run' } @ARGV;
 @ARGV = grep { $_ ne '--dry-run' } @ARGV;
 
 my $MODE = shift @ARGV
-  or die "Usage: $0 {backup|backup-update|restore|restore-update|restore-domain|restore-domains|test-restore|migrate} [--dry-run]\n";
-
-my $UPDATE = ($MODE =~ /update$/) ? 1 : 0;
+  or die "Usage: $0 {backup|backup-update|restore|restore-domain|restore-domains|upload|import|test-restore|migrate} [args...] [--dry-run]\n";
 
 # ================= GLOBALS =================
 my $HOST   = hostname();
@@ -38,193 +32,284 @@ my $DATE   = strftime("%Y-%m-%d_%H-%M-%S", localtime);
 my $TMPDIR = "/tmp/vmin-$DATE";
 my $LOG    = "$TMPDIR/run.log";
 
-my @EXCLUDES = (
-    "--exclude=/var/cache",
-    "--exclude=/var/tmp",
-    "--exclude=/tmp",
-    "--exclude=/var/log/journal",
-    "--exclude=/var/lib/dnf",
-    "--exclude=**/.cache"
-);
+my $SSH        = "ssh -p $SSH_PORT -o LogLevel=ERROR $REMOTE_USER\@$REMOTE_HOST";
+my $RSYNC_BASE = "rsync -a -e 'ssh -p $SSH_PORT -o LogLevel=ERROR' " . ($DRYRUN ? "--dry-run " : "");
 
 # ================= OS DETECTION =================
-my ($OS_FAMILY, $OS_NAME);
-
+my $OS_FAMILY;
 if (-e "/etc/os-release") {
     open my $fh, "<", "/etc/os-release";
     while (<$fh>) {
-        $OS_NAME = $1 if /^ID=(.+)/;
+        if (/^ID=(.+)/) {
+            my $id = $1;
+            $id =~ s/"//g;
+            $id =~ s/\s+//g;
+            $OS_FAMILY = ($id =~ /rocky|rhel|almalinux|centos|fedora/) ? "rhel" : "debian";
+            last;
+        }
     }
     close $fh;
 }
+$OS_FAMILY ||= "debian";
 
-$OS_NAME =~ s/"//g;
+my %PKG_CMD = (
+    'rhel'   => 'rpm -qa | sort',
+    'debian' => q(dpkg-query -W -f='${Package}=${Version}\n' | sort),
+);
 
-if ($OS_NAME =~ /rocky|rhel|almalinux|centos/) {
-    $OS_FAMILY = "rhel";
-}
-elsif ($OS_NAME =~ /ubuntu|debian/) {
-    $OS_FAMILY = "debian";
-}
-else {
-    die "Unsupported OS: $OS_NAME\n";
+# ================= LOCK MANAGEMENT =================
+my $LOCKED = 0;
+my $LOCK_FH;
+
+sub lock_or_die {
+    open $LOCK_FH, ">", $LOCKFILE or die "Cannot open lockfile $LOCKFILE: $!\n";
+    flock($LOCK_FH, LOCK_EX | LOCK_NB) or die "Another run is currently active.\n";
+    $LOCKED = 1;
 }
 
-# ================= OS-ABSTRACTION =================
-my %PKG = (
-    'rhel' => {
-        'install' => "dnf install -y",
-        'list'    => "rpm -qa | sort",
-        'mailpkg' => "mailx",
-        'cronpkg' => "cronie",
-        'mysql'   => "mysql",
-        'repos'   => "/etc/yum.repos.d",
-    },
-    'debian' => {
-        'install' => "apt-get install -y",
-        'list'    => "dpkg-query -W -f='\${Package}=\${Version}\n' | sort",
-        'mailpkg' => "mailutils",
-        'cronpkg' => "cron",
-        'mysql'   => "mysql-client",
-        'repos'   => "/etc/apt",
+sub release_lock {
+    if ($LOCKED && -e $LOCKFILE) {
+        flock($LOCK_FH, LOCK_UN) if $LOCK_FH;
+        close $LOCK_FH if $LOCK_FH;
+        unlink $LOCKFILE;
+        $LOCKED = 0;
     }
-);
-
-my %PKG_MAP = (
-    'rhel_to_debian' => {
-        'httpd' => 'apache2',
-        'mariadb-server' => 'mariadb-server',
-        'mysql-server' => 'mysql-server',
-        'php' => 'php',
-        'php-cli' => 'php-cli',
-        'php-fpm' => 'php-fpm',
-        'bind' => 'bind9',
-        'vsftpd' => 'vsftpd',
-        'postfix' => 'postfix',
-        'dovecot' => 'dovecot-core',
-        'cronie' => 'cron',
-        'firewalld' => 'ufw',
-    },
-    'debian_to_rhel' => {
-        'apache2' => 'httpd',
-        'mariadb-server' => 'mariadb-server',
-        'mysql-server' => 'mysql-server',
-        'php' => 'php',
-        'php-cli' => 'php-cli',
-        'php-fpm' => 'php-fpm',
-        'bind9' => 'bind',
-        'vsftpd' => 'vsftpd',
-        'postfix' => 'postfix',
-        'dovecot-core' => 'dovecot',
-        'cron' => 'cronie',
-        'ufw' => 'firewalld',
-    },
-);
-
-# ================= RSYNC =================
-my $SSH = "ssh -p $SSH_PORT $REMOTE_USER\@$REMOTE_HOST";
-my $RSYNC_BASE = "rsync -Aax --numeric-ids --xattrs --acls " . join(" ", @EXCLUDES);
-my $RSYNC_PUSH = $RSYNC_BASE . ($UPDATE ? " --ignore-existing " : " --delete ") . ($DRYRUN ? " --dry-run " : "");
-my $RSYNC_PULL = $RSYNC_BASE . ($UPDATE ? " --ignore-existing --size-only " : "") . ($DRYRUN ? " --dry-run " : "");
-
-# ================= FUNCTIONS =================
-sub run { my ($cmd)=@_; print "[RUN] $cmd\n"; return if $DRYRUN && $cmd !~ /rsync/; system("$cmd >> $LOG 2>&1")==0 or die "FAILED: $cmd\n"; }
-sub lock_or_die { open my $fh, ">", $LOCKFILE or die "Cannot lock\n"; flock($fh, LOCK_EX | LOCK_NB) or die "Another run active\n"; }
-sub checksum { my ($dir)=@_; run("cd $dir && sha256sum * > SHA256SUMS"); }
-sub verify { my ($dir)=@_; run("cd $dir && sha256sum -c SHA256SUMS"); }
-sub mailit { my ($s,$b)=@_; open my $m, "|mail -s \"$s\" -r \"$MAIL_FROM\" $MAIL_TO"; print $m $b; close $m; }
-sub json_status { my ($st,$msg)=@_; print encode_json({ host=>$HOST,mode=>$MODE,update=>$UPDATE,dryrun=>$DRYRUN,status=>$st,message=>$msg,time=>time() })."\n"; }
-
-sub list_domains {
-    my @domains; open my $fh,"virtualmin list-domains --name --user --home |" or die;
-    while(<$fh>){ my ($name,$user,$home)=split; push @domains,{name=>$name,user=>$user,home=>$home}; }
-    close $fh;
-    return @domains;
 }
-sub domain_info { my ($domain)=@_; for my $d(list_domains()){ return $d if $d->{name} eq $domain; } die "Domain not found: $domain\n"; }
-sub skip_package { my ($pkg)=@_; return 1 if $pkg=~/kernel|firmware|grub|systemd|linux-image/; return 1 if $pkg=~/selinux|policycoreutils/; return 0; }
-sub translate_packages { my ($src_os,$dst_os,$file)=@_; my @out; open my $fh,"<",$file or die; while(<$fh>){ chomp; my $pkg=$_; next if skip_package($pkg); if($src_os ne $dst_os){ my $map=$PKG_MAP{"${src_os}_to_${dst_os}"}{$pkg}; push @out,$map if $map; } else { push @out,$pkg; } } close $fh; return @out; }
+
+# ================= HELPERS =================
+sub run {
+    my ($cmd) = @_;
+    print "[RUN] $cmd\n";
+    return if $DRYRUN;
+    system("$cmd >> $LOG 2>&1") == 0 or die "FAILED: $cmd\n";
+}
+
+sub mailit {
+    my ($subj, $body) = @_;
+    return if $DRYRUN;
+    open my $m, "| mail -s \"$subj\" -r \"$MAIL_FROM\" \"$MAIL_TO\"" or return;
+    print $m $body;
+    close $m;
+}
+
+sub json_status {
+    my ($status, $msg) = @_;
+    print encode_json({
+        host    => $HOST,
+        mode    => $MODE,
+        dryrun  => $DRYRUN,
+        status  => $status,
+        message => $msg,
+        time    => time()
+    }) . "\n";
+}
+
+sub get_latest_remote_date {
+    my $cmd = "$SSH 'ls -1d $REMOTE_BASE/20* 2>/dev/null | sort | tail -n 1'";
+    my $latest = `$cmd`;
+    $latest =~ s/\r//g if $latest;
+    chomp $latest if $latest;
+    if (!$latest && $DRYRUN) {
+        return "YYYY-MM-DD_HH-MM-SS";
+    }
+    die "No remote backups found in $REMOTE_BASE\n" unless $latest;
+    $latest =~ s#^.*/##;
+    return $latest;
+}
 
 # ================= PRECHECK =================
-die "Must be root\n" if $> != 0;
-lock_or_die();
+die "Must be run as root\n" if $> != 0 && !$DRYRUN;
+lock_or_die() unless $DRYRUN;
 make_path($TMPDIR) unless $DRYRUN;
 
 eval {
 
-if($MODE=~/^backup/){
-    run("mysqldump -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS --all-databases --single-transaction --routines --events > $TMPDIR/db.sql");
-    run("$PKG{$OS_FAMILY}{list} > $TMPDIR/packages.txt");
-    open my $os,">","$TMPDIR/os.txt"; print $os "$OS_FAMILY\n"; close $os;
-    run("tar --xattrs --acls -czf $TMPDIR/etc.tar.gz /etc @EXCLUDES");
-    run("tar -czf $TMPDIR/repos.tar.gz $PKG{$OS_FAMILY}{repos}");
-    checksum($TMPDIR) unless $DRYRUN;
-    run("$SSH 'mkdir -p $REMOTE_BASE/$DATE'");
-    run("$RSYNC_PUSH $TMPDIR/ $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$DATE/meta/");
-    run("$RSYNC_PUSH /home/ $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/");
-    run("$RSYNC_PUSH /root/ $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/root/");
-    run("$SSH 'find $REMOTE_BASE -maxdepth 1 -type d -mtime +$RETENTION_DAYS -exec rm -rf {} \\;'") unless $UPDATE;
-    json_status("success","backup complete");
-    mailit("SUCCESS backup $HOST","Backup finished");
-}
+    if ($MODE eq "backup" || $MODE eq "backup-update") {
+        my $LOCAL_DOMAINS = "$TMPDIR/domains";
+        my $LOCAL_META    = "$TMPDIR/meta";
+        make_path($LOCAL_DOMAINS, $LOCAL_META) unless $DRYRUN;
 
-elsif($MODE=~/^restore/){
-    if($MODE eq "restore-domain"){
-        my $domain=shift @ARGV or die "Domain required\n"; my $d=domain_info($domain);
-        run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/$d->{user}/ $d->{home}/");
-        run("$SSH 'grep \"CREATE DATABASE .*${domain}\" $REMOTE_BASE/*/meta/db.sql' > $TMPDIR/${domain}.sql");
-        run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/${domain}.sql");
-        json_status("success","domain restored: $domain");
-        mailit("SUCCESS domain restore $domain","Domain $domain restored");
-    } elsif($MODE eq "restore-domains"){
-        for my $d(list_domains()){ run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/$d->{user}/ $d->{home}/"); }
-        run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/db.sql");
-        json_status("success","all domains restored");
-    } else {
-        run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/ /home/");
-        run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/root/ /root/");
-        unless($UPDATE){
-            run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/*/meta/ $TMPDIR/");
-            verify($TMPDIR) unless $DRYRUN;
-            if($OS_FAMILY eq 'rhel'){ run("dnf install -y \$(cat $TMPDIR/packages.txt)"); }
-            else{ run("apt-get update"); run("xargs -a $TMPDIR/packages.txt apt-get install -y"); }
-            run("tar -xzf $TMPDIR/etc.tar.gz -C /");
-            run("tar -xzf $TMPDIR/repos.tar.gz -C /");
-            run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/db.sql");
+        # 1. Export all virtual servers into individual archive bundles via native Virtualmin CLI
+        run("virtualmin backup-domain --all-domains --all-features --newformat --dest $LOCAL_DOMAINS/%d.tar.gz");
+
+        # 2. Export global Virtualmin server configs, templates, and server plans
+        run("virtualmin backup-domain --all-virtualmin --dest $LOCAL_META/virtualmin-globals.tar.gz");
+
+        # 3. Export system package state & core configurations
+        run("$PKG_CMD{$OS_FAMILY} > $LOCAL_META/packages.txt");
+        my @etc_targets = grep { -e $_ } qw(/etc/hosts /etc/resolv.conf /etc/fstab /etc/ssh);
+        run("tar -czf $LOCAL_META/etc-essential.tar.gz " . join(" ", @etc_targets)) if @etc_targets;
+
+        # 4. Generate metadata checksums
+        my @domain_archives = glob("$LOCAL_DOMAINS/*.tar.gz");
+        if (@domain_archives) {
+            run("cd $LOCAL_DOMAINS && sha256sum *.tar.gz > SHA256SUMS") unless $DRYRUN;
         }
-        json_status("success","restore complete");
-        mailit("SUCCESS restore $HOST","Restore finished");
+        my @meta_files = glob("$LOCAL_META/*");
+        if (@meta_files) {
+            run("cd $LOCAL_META && sha256sum * > SHA256SUMS") unless $DRYRUN;
+        }
+
+        # 5. Upload archives to remote host
+        run("$SSH 'mkdir -p $REMOTE_BASE/$DATE/domains $REMOTE_BASE/$DATE/meta'");
+        run("$RSYNC_BASE $LOCAL_DOMAINS/ $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$DATE/domains/");
+        run("$RSYNC_BASE $LOCAL_META/ $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$DATE/meta/");
+
+        # 6. Retention pruning: target only dated backup folders (format YYYY-MM-DD_*)
+        run("$SSH 'find $REMOTE_BASE -mindepth 1 -maxdepth 1 -type d -name \"20*\" -mtime +$RETENTION_DAYS -exec rm -rf {} +'");
+
+        json_status("success", "Virtualmin backup successfully exported and shipped");
+        mailit("SUCCESS backup $HOST", "Virtualmin export backup finished successfully on $HOST.");
     }
-}
 
-elsif($MODE eq "test-restore"){
-    my $domain=shift @ARGV; my $TESTDIR="/tmp/restore-test-$DATE"; make_path($TESTDIR);
-    if($domain){ my $d=domain_info($domain); run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/$d->{user}/ $TESTDIR/$d->{user}/"); run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < <(grep \"$domain\" $REMOTE_BASE/*/meta/db.sql)"); }
-    else{ run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/ $TESTDIR/"); }
-    die "Restore test failed" unless -d $TESTDIR;
-    system("rm -rf $TESTDIR");
-    json_status("success","restore test passed");
-    mailit("SUCCESS restore test $HOST","Restore test passed");
-}
+    elsif ($MODE eq "upload") {
+        my $source_file = shift @ARGV
+          or die "Source archive required: $0 upload /path/to/archive.tar.gz [dest_folder] [--dry-run]\n";
+        die "Archive not found: $source_file\n" unless -f $source_file || $DRYRUN;
+        my $dest_folder = shift @ARGV || "manual_uploads";
 
-elsif($MODE eq "migrate"){
-    die "Migration must not be --dry-run only\n" if $DRYRUN;
-    print "=== CROSS-OS MIGRATION MODE ===\n";
-    open my $osf,"<","$TMPDIR/os.txt" or die; my $SRC_OS=<$osf>; chomp $SRC_OS; close $osf;
-    my @pkgs=translate_packages($SRC_OS,$OS_FAMILY,"$TMPDIR/packages.txt");
-    if(@pkgs){ if($OS_FAMILY eq 'rhel'){ run("dnf install -y @pkgs"); } else { run("apt-get update"); run("apt-get install -y @pkgs"); } }
-    run("tar -xzf $TMPDIR/etc.tar.gz -C / etc/ssh etc/cron* etc/php*");
-    run("mysql -h$MYSQL_HOST -u$MYSQL_USER -p$MYSQL_PASS < $TMPDIR/db.sql");
-    for my $d(list_domains()){ run("$RSYNC_PULL $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/current/home/$d->{user}/ $d->{home}/"); }
-    json_status("success","cross-OS migration complete");
-    mailit("SUCCESS migration $HOST","Cross-OS migration completed");
-}
+        run("$SSH 'mkdir -p $REMOTE_BASE/$dest_folder'");
+        run("$RSYNC_BASE $source_file $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$dest_folder/");
 
-else { die "Invalid mode\n"; }
+        json_status("success", "Uploaded $source_file to $REMOTE_BASE/$dest_folder/");
+        mailit("SUCCESS upload $HOST", "Uploaded $source_file to $REMOTE_BASE/$dest_folder/.");
+    }
+
+    elsif ($MODE eq "import") {
+        my $source_target = shift @ARGV
+          or die "Local archive or directory required: $0 import /path/to/archive_or_dir [--all] [--dry-run]\n";
+        my $is_all = shift @ARGV || "";
+
+        die "Target not found: $source_target\n" unless -e $source_target || $DRYRUN;
+
+        if (-d $source_target || $is_all eq "--all") {
+            run("virtualmin restore-domain --source $source_target --all-domains --all-features --reallocate-ip --skip-warnings");
+            json_status("success", "Imported all domains from $source_target");
+            mailit("SUCCESS import $HOST", "Imported all domains from $source_target.");
+        } else {
+            run("virtualmin restore-domain --source $source_target --all-features --reallocate-ip --skip-warnings");
+            json_status("success", "Imported domain from $source_target");
+            mailit("SUCCESS import $HOST", "Imported domain from $source_target.");
+        }
+    }
+
+    elsif ($MODE eq "restore-domain") {
+        my $domain = shift @ARGV
+          or die "Domain name required: $0 restore-domain example.com [backup_date] [--dry-run]\n";
+        my $target_date = shift @ARGV || get_latest_remote_date();
+
+        my $RESTORE_DIR = "$TMPDIR/restore";
+        make_path($RESTORE_DIR) unless $DRYRUN;
+
+        # Download targeted domain archive
+        run("$RSYNC_BASE $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$target_date/domains/$domain.tar.gz $RESTORE_DIR/");
+
+        # Restore virtual server using Virtualmin engine
+        run("virtualmin restore-domain --source $RESTORE_DIR/$domain.tar.gz --all-features --reallocate-ip --skip-warnings");
+
+        json_status("success", "Domain $domain restored successfully from $target_date");
+        mailit("SUCCESS restore-domain $domain", "Domain $domain restored successfully on $HOST.");
+    }
+
+    elsif ($MODE eq "restore-domains") {
+        my $target_date = shift @ARGV || get_latest_remote_date();
+        my $RESTORE_DIR = "$TMPDIR/restore";
+        make_path($RESTORE_DIR) unless $DRYRUN;
+
+        # Pull all domain archives from remote host
+        run("$RSYNC_BASE $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$target_date/domains/ $RESTORE_DIR/domains/");
+
+        # Verify integrity if checksum file is present
+        if (-f "$RESTORE_DIR/domains/SHA256SUMS") {
+            run("cd $RESTORE_DIR/domains && sha256sum -c SHA256SUMS") unless $DRYRUN;
+        }
+
+        # Restore all virtual servers
+        run("virtualmin restore-domain --source $RESTORE_DIR/domains/ --all-domains --all-features --reallocate-ip --skip-warnings");
+
+        json_status("success", "All Virtualmin domains restored from $target_date");
+        mailit("SUCCESS restore-domains $HOST", "All domains restored successfully on $HOST.");
+    }
+
+    elsif ($MODE eq "restore") {
+        my $target_date = shift @ARGV || get_latest_remote_date();
+        my $RESTORE_DIR = "$TMPDIR/restore";
+        make_path($RESTORE_DIR) unless $DRYRUN;
+
+        # Pull all domain archives and metadata from remote host
+        run("$RSYNC_BASE $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$target_date/ $RESTORE_DIR/");
+
+        # Verify integrity
+        if (-f "$RESTORE_DIR/domains/SHA256SUMS") {
+            run("cd $RESTORE_DIR/domains && sha256sum -c SHA256SUMS") unless $DRYRUN;
+        }
+
+        # 1. Restore global Virtualmin configuration
+        if (-f "$RESTORE_DIR/meta/virtualmin-globals.tar.gz" || $DRYRUN) {
+            run("virtualmin restore-domain --source $RESTORE_DIR/meta/virtualmin-globals.tar.gz --all-virtualmin --skip-warnings");
+        }
+
+        # 2. Restore all virtual servers
+        run("virtualmin restore-domain --source $RESTORE_DIR/domains/ --all-domains --all-features --reallocate-ip --skip-warnings");
+
+        json_status("success", "Full Virtualmin server restore completed from $target_date");
+        mailit("SUCCESS restore $HOST", "Full server restore completed successfully on $HOST.");
+    }
+
+    elsif ($MODE eq "test-restore") {
+        my $domain = shift @ARGV;
+        my $target_date = shift @ARGV || get_latest_remote_date();
+        my $TESTDIR = "/tmp/test-restore-$DATE";
+        make_path($TESTDIR) unless $DRYRUN;
+
+        if ($domain) {
+            run("$RSYNC_BASE $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$target_date/domains/$domain.tar.gz $TESTDIR/");
+            run("tar -tzf $TESTDIR/$domain.tar.gz > /dev/null");
+        } else {
+            my $dry_flag = $DRYRUN ? "" : "--dry-run ";
+            run("$RSYNC_BASE $dry_flag$REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$target_date/domains/ $TESTDIR/");
+        }
+
+        remove_tree($TESTDIR) unless $DRYRUN;
+        json_status("success", "Archive validation check passed for $target_date");
+        mailit("SUCCESS test-restore $HOST", "Archive structure validation succeeded for $target_date.");
+    }
+
+    elsif ($MODE eq "migrate") {
+        my $target_date = shift @ARGV || get_latest_remote_date();
+        my $RESTORE_DIR = "$TMPDIR/restore";
+        make_path($RESTORE_DIR) unless $DRYRUN;
+
+        print "=== CROSS-OS / SERVER MIGRATION MODE ===\n";
+        run("$RSYNC_BASE $REMOTE_USER\@$REMOTE_HOST:$REMOTE_BASE/$target_date/ $RESTORE_DIR/");
+
+        if (-f "$RESTORE_DIR/domains/SHA256SUMS") {
+            run("cd $RESTORE_DIR/domains && sha256sum -c SHA256SUMS") unless $DRYRUN;
+        }
+
+        if (-f "$RESTORE_DIR/meta/virtualmin-globals.tar.gz" || $DRYRUN) {
+            run("virtualmin restore-domain --source $RESTORE_DIR/meta/virtualmin-globals.tar.gz --all-virtualmin --skip-warnings");
+        }
+
+        run("virtualmin restore-domain --source $RESTORE_DIR/domains/ --all-domains --all-features --reallocate-ip --skip-warnings");
+
+        json_status("success", "Cross-OS / server migration completed from $target_date");
+        mailit("SUCCESS migration $HOST", "Cross-OS migration completed successfully on $HOST.");
+    }
+
+    else {
+        die "Invalid mode: $MODE\n";
+    }
 
 };
 
-if($@){ json_status("failure",$@); mailit("FAILED $MODE $HOST",$@); die $@; }
-system("rm -rf $TMPDIR") unless $DRYRUN;
-unlink $LOCKFILE;
+if ($@) {
+    my $err = $@;
+    json_status("failure", $err);
+    mailit("FAILED $MODE $HOST", $err);
+    release_lock();
+    die $err;
+}
 
+remove_tree($TMPDIR) unless $DRYRUN;
+release_lock();

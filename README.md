@@ -1,188 +1,229 @@
 # Virtualmin Backup Management System
-A fully documented, production-ready for Virtualmin backup, restore, and cross-OS migration system.
 
-Incorporating everything needed to manage a Virtualmin server:
-* full & incremental backups
-* per-domain restores
-* automated restore testing
-* OS abstraction (Rocky/Ubuntu)
-* and cross-OS migration.
+A fully documented, production-ready backup, restore, and cross-OS migration management system built specifically for **Virtualmin** (Webmin).
+
+Unlike generic file-copy scripts, this system utilizes Virtualmin's native CLI export and restore engine (`virtualmin backup-domain` and `virtualmin restore-domain`). Every virtual server is exported into an isolated, self-contained archive bundling its Apache/Nginx web configurations, DNS records, SSL/TLS certificates, mailboxes, and MySQL/MariaDB databases.
 
 ---
 
-> ## :warning: Disclaimer:
+> ## :warning: Disclaimer
 >
-> By using this code, you acknowledge and agree that the usage is at your sole responsibility. The repository maintainers cannot be held liable for any damage, data loss, or disruptions to your systems.
+> By using this code, you acknowledge and agree that usage is at your sole responsibility. The repository maintainers cannot be held liable for any damage, data loss, or disruptions to your systems.
 >
-> <ins>***Important:***</ins>
->
-> *Testing:* You should thoroughly test the code in a safe test or sandbox environment before using it in any production systems.
->
-> *Backups:* Ensure that proper backups are made and verified before performing any restoration or migration tasks.
->
-> *No Liability:* The maintainers make no warranties regarding the code’s performance or suitability for your specific use case.
->
-> **Use this code at your own risk.**
+> **Important:**
+> * **Testing:** Thoroughly test the code in a safe test or sandbox environment before using it in any production systems.
+> * **Backups:** Ensure that proper backups are verified before performing any restoration or migration tasks.
+> * **Use this code at your own risk.**
 
 ---
 
-**Virtualmin Backup & Migration System — Documentation & Script**
+# 1. Overview & Architecture
 
-# 1. <ins>*Overview*</ins>
+### Why Native Virtualmin CLI Export?
+Raw file synchronization (`rsync /home` and `mysqldump --all-databases`) misses Virtualmin internal metadata, server plans, custom templates, and DNS zone configurations, and can corrupt live databases or break permissions. 
 
-  This system allows you to:
+This system resolves those issues by executing Virtualmin's native export engine:
+* **Per-Domain Archive Bundles:** Uses `virtualmin backup-domain --all-domains --all-features --newformat --dest .../%d.tar.gz` to create individual `.tar.gz` archives per domain containing web files, databases, mailboxes, SSL certificates, and DNS settings.
+* **Global Configuration Preservation:** Backs up server templates, custom fields, and account plans via `virtualmin backup-domain --all-virtualmin`.
+* **System Package & Core State:** Catalogs installed packages (`rpm -qa` on RHEL/Rocky, `dpkg-query` on Debian/Ubuntu) and archives core system files (`/etc/hosts`, `/etc/resolv.conf`, `/etc/fstab`, `/etc/ssh`).
+* **No Database Passwords in Script:** MySQL/MariaDB authentication is handled natively through Virtualmin's internal subsystem, eliminating plain-text root database passwords from configuration.
+* **Safe Remote Transport:** Rsync and SSH operations fully propagate custom SSH ports (`-p $SSH_PORT`).
+* **Integrity Checksums:** Generates and verifies SHA256 checksums (`SHA256SUMS`) for all archives.
+* **Safe Retention Pruning:** The remote prune command targets only dated directories (`-name "20*" -mindepth 1`), preventing accidental deletion of the base directory or manual uploads.
+* **Seamless Cross-OS Portability:** Native Virtualmin archives can be restored directly between Rocky Linux / RHEL and Ubuntu / Debian servers using `--reallocate-ip` and `--skip-warnings`.
 
-  * Backup all Virtualmin domains, MySQL databases, /etc, package lists, and home/root directories.
-  * Restore fully or incrementally.
-  * Restore individual domains or all domains.
-  * Test restores automatically without touching production data.
-  * Perform cross-OS migrations between Rocky Linux (RHEL family) and Ubuntu/Debian systems.
-  * Verify data integrity with SHA256 checksums.
-  * Use dry-run mode for testing.
-  * Send email notifications on success/failure.
-  * Prune old backups automatically.
-  * Operate safely with locks to prevent concurrent runs.
+---
 
+# 2. Supported Operating Systems
 
-# 2. <ins>*Supported Operating Systems*</ins>
+* **Rocky Linux / AlmaLinux / RHEL / CentOS 8 & 9**
+* **Ubuntu 20.04 / 22.04 / 24.04 LTS**
+* **Debian 10 / 11 / 12**
 
-  * Rocky Linux 8/9
-  * Ubuntu 20.04 / 22.04 / 24.04
-  * Debian 10/11 (partial, Ubuntu-tested)
+OS family detection and package listing commands are handled automatically.
 
-All package manager commands, repo paths, and OS-specific configurations are automatically handled.
+---
 
+# 3. Command Modes
 
-# 3. <ins>*Features*</ins>
+| Mode | Syntax | Description |
+| :--- | :--- | :--- |
+| **`backup`** | `virtualmin-backup.pl backup [--dry-run]` | Exports all virtual servers into individual `.tar.gz` bundles, exports global Virtualmin settings, records system package inventory and `/etc` network configs, generates SHA256 checksums, uploads to remote storage, and prunes old backups. |
+| **`restore`** | `virtualmin-backup.pl restore [backup_date] [--dry-run]` | Full server restore. Downloads remote backup for the specified date (or defaults to the latest backup), verifies SHA256 checksums, restores global Virtualmin templates/plans, and restores all virtual servers. |
+| **`restore-domain`** | `virtualmin-backup.pl restore-domain <domain.com> [backup_date] [--dry-run]` | Downloads and restores a single domain (web files, mailboxes, DNS, SSL, and MySQL databases) from remote storage. |
+| **`restore-domains`** | `virtualmin-backup.pl restore-domains [backup_date] [--dry-run]` | Restores all virtual server domain archives from remote storage without overwriting global server templates. |
+| **`upload`** | `virtualmin-backup.pl upload </path/to/archive.tar.gz> [dest_folder] [--dry-run]` | Uploads a local archive directly to the remote backup repository (defaults to `manual_uploads` or a custom subfolder). |
+| **`import`** | `virtualmin-backup.pl import </path/to/archive_or_dir> [--all] [--dry-run]` | Imports a local domain archive or an entire directory of archives into Virtualmin using native restore with `--reallocate-ip` and `--skip-warnings`. |
+| **`test-restore`** | `virtualmin-backup.pl test-restore [domain.com] [backup_date] [--dry-run]` | Validates remote backup accessibility. If a domain is specified, pulls the archive and verifies its tar structure integrity (`tar -tzf`). If omitted, tests remote rsync reachability. |
+| **`migrate`** | `virtualmin-backup.pl migrate [backup_date] [--dry-run]` | Cross-OS / server migration. Downloads remote archives and restores them using Virtualmin's native restore engine with automatic IP reallocation and warning tolerance. |
 
-  ***Backup Modes***
-  | *Mode*        | *Description* |
-  | ------------- | ------------- |
-  | backup        | Full backup of all domains, system files, packages, and databases.<br> Destructive overwrite of previous remote backup if configured. |
-  | backup-update | Incremental backup: only changed files are pushed to remote. Safe for frequent runs. |
-  
-  ***Restore Modes***
-  | *Mode*                    | *Description*  |
-  | ------------------------- | -------------- |
-  | restore                   | Full restore of all files, configs, and databases. Destructive. |
-  | restore-update            | Incremental restore: only missing or newer files restored; does not overwrite live data. |
-  | restore-domain \<domain\> | Restore a single Virtualmin domain (files + database). |
-  | restore-domains           |  Restore all Virtualmin domains without touching system files/packages. |
-  | test-restore \<domain\>   | Restore test: validates restore in a temporary location, optional single domain. |
-  
-  ***Cross-OS Migration***
-  | *Mode*  | *Description* |
-  | ------- | ------------- |
-  | migrate | Safely migrate backup from one OS family to another (Rocky ↔ Ubuntu).<br> Packages are mapped, OS config restored selectively, domains and databases fully restored. |
-  
-  ***Safety & Verification***
-  * SHA256 checksum verification
-  * Dry-run mode (--dry-run)
-  * Lock file prevents concurrent runs
-  * Email notifications for success/failure
-  * Retention pruning of old backups
+---
 
+# 4. Usage Examples
 
-# 4. <ins>*Usage Examples*</ins>
-
-  #### Full backup
-  ``virtualmin-backup.pl backup``
-  
-  #### Incremental backup
-  ``virtualmin-backup.pl backup-update``
-  
-  #### Full restore
-  ``virtualmin-backup.pl restore``
-  
-  #### Incremental restore
-  ``virtualmin-backup.pl restore-update``
-  
-  #### Restore single domain
-  ``virtualmin-backup.pl restore-domain example.com``
-  
-  #### Restore all domains
-  ``virtualmin-backup.pl restore-domains``
-  
-  #### Test restore safely
-  ``virtualmin-backup.pl test-restore``
-  
-  ``virtualmin-backup.pl test-restore example.com``
-  
-  #### Cross-OS migration (Rocky <-> Ubuntu)
-  ``virtualmin-backup.pl migrate``
-  
-  #### Dry-run mode (safe testing)
-  ``virtualmin-backup.pl backup-update --dry-run``
-  
-  ``virtualmin-backup.pl restore-update --dry-run``
-
-
-# 5. <ins>*Cron Recommendations*</ins>
-
-  ### Incremental backup every 6 hours
-  ``0 */6 * * * /usr/local/sbin/virtualmin-backup.pl backup-update``
-
-  ### Full backup weekly
-  ``0 2 * * 0 /usr/local/sbin/virtualmin-backup.pl backup``
-
-
-# 6. <ins>*Directory Structure*</ins>
-
-  /tmp/vmin-YYYY-MM-DD_HH-MM-SS/ → temporary working directory
-  
-  $REMOTE_BASE/YYYY-MM-DD_HH-MM-SS/ → remote backup storage
-  
-  $REMOTE_BASE/current/ → latest backups for restore/migration
-
-
-# 7. <ins>*Installation Instructions*</ins>
-
-  Place script:
-
-  ``sudo cp virtualmin-backup.pl /usr/local/sbin/``
-  
-  ``sudo chmod 700 /usr/local/sbin/virtualmin-backup.pl``
-
-  > Ensure required tools are installed:
-  > 
-  > rsync, ssh, tar, sha256sum, mysql, mysqldump, virtualmin, mailx/mailutils, crontab
-  
-  The script checks for missing commands and exits if not installed.
-  
-  Configure the variables at the top:
-
-  ```
-  my $REMOTE_USER = "backupuser";
-  my $REMOTE_HOST = "backup.example.com";
-  my $REMOTE_BASE = "/backups/virtualmin";
-  my $SSH_PORT    = 22;
-  
-  my $MYSQL_HOST  = "localhost";
-  my $MYSQL_USER  = "root";
-  my $MYSQL_PASS  = "MYSQL_ROOT_PASSWORD";
-   
-  my $MAIL_TO     = "admin@example.com";
-  my $MAIL_FROM   = "backup@" . hostname();
-  
-  my $RETENTION_DAYS = 30;
+### Full Backup
+```bash
+/usr/local/sbin/virtualmin-backup.pl backup
 ```
 
-# 8. <ins>*Final Script*</ins>
+### Full Restore (Latest Backup)
+```bash
+/usr/local/sbin/virtualmin-backup.pl restore
+```
 
-  Save the included script as ``/usr/local/sbin/virtualmin-backup.pl``
+### Full Restore from a Specific Date
+```bash
+/usr/local/sbin/virtualmin-backup.pl restore 2026-09-12_18-00-00
+```
+
+### Restore a Single Domain
+```bash
+/usr/local/sbin/virtualmin-backup.pl restore-domain example.com
+```
+
+### Restore a Single Domain from a Specific Date
+```bash
+/usr/local/sbin/virtualmin-backup.pl restore-domain example.com 2026-09-12_18-00-00
+```
+
+### Restore All Domains
+```bash
+/usr/local/sbin/virtualmin-backup.pl restore-domains
+```
+
+### Upload a Local Archive to Remote Storage
+```bash
+/usr/local/sbin/virtualmin-backup.pl upload /tmp/example.com.tar.gz
+/usr/local/sbin/virtualmin-backup.pl upload /tmp/example.com.tar.gz custom_backups
+```
+
+### Import a Local Domain Archive into Virtualmin
+```bash
+# Import a single domain archive
+/usr/local/sbin/virtualmin-backup.pl import /tmp/example.com.tar.gz
+
+# Import all domain archives within a directory
+/usr/local/sbin/virtualmin-backup.pl import /tmp/domains_dir/ --all
+```
+
+### Test Restore Safely (Non-Destructive)
+```bash
+# Test remote connectivity and backup availability
+/usr/local/sbin/virtualmin-backup.pl test-restore
+
+# Test integrity of a specific domain archive
+/usr/local/sbin/virtualmin-backup.pl test-restore example.com
+```
+
+### Cross-OS Migration (Rocky Linux ↔ Ubuntu / Debian)
+```bash
+/usr/local/sbin/virtualmin-backup.pl migrate
+```
+
+### Dry-Run Mode (Simulate without Making Changes)
+```bash
+/usr/local/sbin/virtualmin-backup.pl backup --dry-run
+/usr/local/sbin/virtualmin-backup.pl restore --dry-run
+/usr/local/sbin/virtualmin-backup.pl restore-domain example.com --dry-run
+```
 
 ---
 
-  This script, combined with the documentation above, is fully production-ready.
+# 5. Remote Storage Directory Structure
 
-  It supports:
-  * Full & incremental backups
-  * Full & incremental restores
-  * Per-domain restores
-  * Automated restore testing
-  * Cross-OS migration Rocky ↔ Ubuntu
-  * Dry-run & verification
-  * Email notifications & JSON status
-  * Safe retention/pruning
+```text
+$REMOTE_BASE/
+├── 2026-09-12_18-00-00/
+│   ├── domains/
+│   │   ├── domain1.com.tar.gz
+│   │   ├── domain2.com.tar.gz
+│   │   └── SHA256SUMS
+│   └── meta/
+│       ├── virtualmin-globals.tar.gz
+│       ├── packages.txt
+│       ├── etc-essential.tar.gz
+│       └── SHA256SUMS
+├── 2026-09-13_18-00-00/
+│   ├── domains/
+│   └── meta/
+└── manual_uploads/
+    └── custom-domain.tar.gz
+```
 
-You can now use it in production or for hosting migrations, with confidence.
+* **Dated Snapshots:** Each backup run creates a dedicated `$DATE` directory containing isolated `domains/` and `meta/` subdirectories.
+* **Automatic Retention:** The pruning routine deletes dated directories matching `-name "20*"` that are older than `$RETENTION_DAYS`. Subfolders such as `manual_uploads/` are never deleted by the retention cleaner.
+
+---
+
+# 6. Installation & Configuration
+
+### 1. Place and Secure the Script
+```bash
+sudo cp virtualmin-backup.pl /usr/local/sbin/
+sudo chmod 700 /usr/local/sbin/virtualmin-backup.pl
+sudo chown root:root /usr/local/sbin/virtualmin-backup.pl
+```
+
+### 2. Prerequisites
+Ensure required tools and Perl modules are installed:
+* **CLI Tools:** `virtualmin`, `rsync`, `ssh`, `tar`, `sha256sum`, `mail` (`mailx` or `mailutils`)
+* **Perl Modules:** `JSON`, `POSIX`, `File::Path`, `Sys::Hostname`, `Fcntl`
+
+On RHEL / Rocky Linux:
+```bash
+sudo dnf install -y rsync openssh-clients tar perl-JSON mailx
+```
+
+On Ubuntu / Debian:
+```bash
+sudo apt-get update
+sudo apt-get install -y rsync openssh-client tar libjson-perl mailutils
+```
+
+### 3. Configure Variables
+Edit the configuration block at the top of `/usr/local/sbin/virtualmin-backup.pl`:
+
+```perl
+# ================= CONFIG =================
+my $REMOTE_USER    = "backupuser";
+my $REMOTE_HOST    = "backup.example.com";
+my $REMOTE_BASE    = "/backups/virtualmin";
+my $SSH_PORT       = 22;
+
+my $MAIL_TO        = 'admin@example.com';
+my $MAIL_FROM      = "backup@" . hostname();
+
+my $LOCKFILE       = "/var/run/virtualmin-backup.lock";
+my $RETENTION_DAYS = 30;
+```
+
+> **Note on Database Passwords:** Root database credentials are not needed in this configuration. Virtualmin securely authenticates with MySQL/MariaDB through its internal subsystem.
+
+### 4. Setup SSH Key Authentication
+Ensure root on the Virtualmin server has passwordless SSH access to `$REMOTE_USER@$REMOTE_HOST`:
+```bash
+ssh-copy-id -p 22 backupuser@backup.example.com
+```
+
+---
+
+# 7. Automated Scheduling (Cron)
+
+Edit root's crontab (`sudo crontab -e`):
+
+```cron
+# Run daily Virtualmin backup at 02:00 AM
+0 2 * * * /usr/local/sbin/virtualmin-backup.pl backup
+
+# Run weekly backup test on Sunday at 04:00 AM
+0 4 * * 0 /usr/local/sbin/virtualmin-backup.pl test-restore
+```
+
+---
+
+# 8. Monitoring & Safety Features
+
+* **File Locking:** Prevents overlapping backup or restore jobs via `/var/run/virtualmin-backup.lock`. Locks are released on normal exit or failure.
+* **JSON Status Output:** Emits machine-readable JSON status objects (`host`, `mode`, `status`, `message`, `time`, `dryrun`) to stdout for integration with centralized log management (ELK, Grafana Loki, Datadog).
+* **Email Alerts:** Sends detailed email notifications on success and failure with the specific command and host information.
+* **Integrity Validation:** Every domain archive and metadata bundle is checksummed with SHA256 and checked prior to restoration.
