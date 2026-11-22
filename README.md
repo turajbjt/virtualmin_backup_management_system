@@ -48,11 +48,11 @@ OS family detection and package listing commands are handled automatically.
 
 | Mode | Syntax | Description |
 | :--- | :--- | :--- |
-| **`backup`** | `virtualmin-backup.pl backup [--dry-run]` | Exports all virtual servers into individual `.tar.gz` bundles, exports global Virtualmin settings, records system package inventory and `/etc` network configs, generates SHA256 checksums, uploads to remote storage, and prunes old backups. |
+| **`backup`** / **`backup-update`** | `virtualmin-backup.pl backup [--dry-run]` | Exports all virtual servers into individual `.tar.gz` bundles, exports global Virtualmin settings, records system package inventory and `/etc` network configs, generates SHA256 checksums, uploads to remote storage, and prunes old backups (`backup-update` is supported as an alias). |
 | **`restore`** | `virtualmin-backup.pl restore [backup_date] [--dry-run]` | Full server restore. Downloads remote backup for the specified date (or defaults to the latest backup), verifies SHA256 checksums, restores global Virtualmin templates/plans, and restores all virtual servers. |
 | **`restore-domain`** | `virtualmin-backup.pl restore-domain <domain.com> [backup_date] [--dry-run]` | Downloads and restores a single domain (web files, mailboxes, DNS, SSL, and MySQL databases) from remote storage. |
 | **`restore-domains`** | `virtualmin-backup.pl restore-domains [backup_date] [--dry-run]` | Restores all virtual server domain archives from remote storage without overwriting global server templates. |
-| **`upload`** | `virtualmin-backup.pl upload </path/to/archive.tar.gz> [dest_folder] [--dry-run]` | Uploads a local archive directly to the remote backup repository (defaults to `manual_uploads` or a custom subfolder). |
+| **`upload`** | `virtualmin-backup.pl upload </path/to/archive_or_dir> [dest_folder] [--dry-run]` | Uploads a local archive file or entire directory directly to the remote backup repository (defaults to `manual_uploads` or a custom subfolder). |
 | **`import`** | `virtualmin-backup.pl import </path/to/archive_or_dir> [--all] [--dry-run]` | Imports a local domain archive or an entire directory of archives into Virtualmin using native restore with `--reallocate-ip` and `--skip-warnings`. |
 | **`test-restore`** | `virtualmin-backup.pl test-restore [domain.com] [backup_date] [--dry-run]` | Validates remote backup accessibility. If a domain is specified, pulls the archive and verifies its tar structure integrity (`tar -tzf`). If omitted, tests remote rsync reachability. |
 | **`migrate`** | `virtualmin-backup.pl migrate [backup_date] [--dry-run]` | Cross-OS / server migration. Downloads remote archives and restores them using Virtualmin's native restore engine with automatic IP reallocation and warning tolerance. |
@@ -91,10 +91,16 @@ OS family detection and package listing commands are handled automatically.
 /usr/local/sbin/virtualmin-backup.pl restore-domains
 ```
 
-### Upload a Local Archive to Remote Storage
+### Upload a Local Archive or Directory to Remote Storage
 ```bash
+# Upload a single archive file
 /usr/local/sbin/virtualmin-backup.pl upload /tmp/example.com.tar.gz
+
+# Upload to a custom remote folder
 /usr/local/sbin/virtualmin-backup.pl upload /tmp/example.com.tar.gz custom_backups
+
+# Upload an entire directory of archives
+/usr/local/sbin/virtualmin-backup.pl upload /tmp/domains_dir/ custom_backups
 ```
 
 ### Import a Local Domain Archive into Virtualmin
@@ -108,11 +114,17 @@ OS family detection and package listing commands are handled automatically.
 
 ### Test Restore Safely (Non-Destructive)
 ```bash
-# Test remote connectivity and backup availability
+# Test remote connectivity and latest backup availability
 /usr/local/sbin/virtualmin-backup.pl test-restore
 
-# Test integrity of a specific domain archive
+# Test remote availability for a specific backup date
+/usr/local/sbin/virtualmin-backup.pl test-restore 2026-09-12_18-00-00
+
+# Test integrity of a specific domain archive from latest backup
 /usr/local/sbin/virtualmin-backup.pl test-restore example.com
+
+# Test integrity of a specific domain archive from a specific backup date
+/usr/local/sbin/virtualmin-backup.pl test-restore example.com 2026-09-12_18-00-00
 ```
 
 ### Cross-OS Migration (Rocky Linux ↔ Ubuntu / Debian)
