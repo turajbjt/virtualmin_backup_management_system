@@ -239,3 +239,31 @@ Edit root's crontab (`sudo crontab -e`):
 * **JSON Status Output:** Emits machine-readable JSON status objects (`host`, `mode`, `status`, `message`, `time`, `dryrun`) to stdout for integration with centralized log management (ELK, Grafana Loki, Datadog).
 * **Email Alerts:** Sends detailed email notifications on success and failure with the specific command and host information.
 * **Integrity Validation:** Every domain archive and metadata bundle is checksummed with SHA256 and checked prior to restoration.
+
+---
+
+# 9. Unit Testing & Verification
+
+The project includes an automated unit test suite built on Perl's standard `Test::More` framework.
+
+### Running the Test Suite
+
+Run the full suite using Perl's standard test runner `prove`:
+
+```bash
+# Run all tests with standard summary
+prove -r t/
+
+# Run all tests with verbose output
+prove -v t/
+```
+
+### Test Coverage
+
+* **`t/00-compile.t`**: Verifies compilation syntax, file permissions, and core dependency availability.
+* **`t/01-cli-arguments.t`**: Tests command-line parsing, `--help` / `-h` behavior, invalid modes, and flexible `--dry-run` positioning.
+* **`t/02-dry-run-modes.t`**: Validates simulated command execution and flag propagation across all operational modes (`backup`, `restore`, `restore-domain`, `restore-domains`, `upload`, `import`, `test-restore`, `migrate`).
+* **`t/03-lockfile.t`**: Verifies non-blocking exclusive file lock acquisition, collision prevention between concurrent runs, and clean lock release.
+* **`t/04-json-status.t`**: Validates structure, fields, and schema of machine-readable JSON status objects emitted across all modes.
+* **`t/05-security.t`**: Enforces strict security constraints: absence of hardcoded database credentials, non-destructive retention prune syntax (`-mindepth 1 -name "20*"`), safe path quoting, and privileged root enforcement.
+
